@@ -5,14 +5,13 @@
 - 출력: HTN 예측 확률 + 위험 등급 + 사용자 피드백 수집
 """
 import os
+import pickle
 from datetime import datetime
-
 import numpy as np
 import pandas as pd
 import streamlit as st
 
 TARGET_COL = "hypertension"
-
 
 st.set_page_config(
     page_title="고혈압 위험 스크리닝",
@@ -24,11 +23,11 @@ st.set_page_config(
 
 @st.cache_resource
 def load_htn_model():
-    """joblib으로 직접 로드 (PyCaret 의존성 제거)"""
-    import joblib
+    """pickle로 직접 로드 (Python 내장, 별도 설치 불필요)"""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     model_path = os.path.join(script_dir, "htn_final_model.pkl")
-    return joblib.load(model_path)
+    with open(model_path, "rb") as f:
+        return pickle.load(f)
 
 
 try:
@@ -60,7 +59,6 @@ def detect_required_features(m):
 
 required_features = detect_required_features(model)
 
-
 st.title("🩺 고혈압 위험 스크리닝 도구")
 st.markdown(
     "**KNHANES 9기 (2022~2024) 데이터 기반 머신러닝 모델** — "
@@ -76,12 +74,10 @@ if not model_loaded:
     st.info("`htn_final_model.pkl` 파일이 같은 폴더에 있는지 확인하세요.")
     st.stop()
 
-
 st.sidebar.header("📋 설문 응답")
 st.sidebar.caption(
     f"모델 요구 변수: {len(required_features) if required_features else '자동 감지'}개"
 )
-
 input_data = {}
 
 with st.sidebar.expander("👤 기본 정보", expanded=True):
@@ -172,19 +168,15 @@ predict_btn = st.sidebar.button("🔍 위험도 예측", type="primary", use_con
 
 def predict_htn(model, input_dict, required_cols):
     df = pd.DataFrame([input_dict])
-
     if required_cols:
         for col in required_cols:
             if col not in df.columns:
                 df[col] = np.nan
         df = df[required_cols]
-
     if TARGET_COL in df.columns:
         df = df.drop(columns=[TARGET_COL])
-
     y_pred = model.predict(df)
     label = int(y_pred[0])
-
     proba = None
     if hasattr(model, "predict_proba"):
         try:
@@ -196,7 +188,6 @@ def predict_htn(model, input_dict, required_cols):
                 proba = float(proba_arr[0, -1])
         except Exception:
             proba = None
-
     if proba is None and hasattr(model, "decision_function"):
         try:
             from scipy.special import expit
@@ -205,10 +196,8 @@ def predict_htn(model, input_dict, required_cols):
             proba = float(expit(s))
         except Exception:
             proba = None
-
     if proba is None:
         proba = float(label)
-
     return proba, label
 
 
@@ -220,9 +209,7 @@ if predict_btn:
             st.error(f"예측 중 오류: {e}")
             st.exception(e)
             st.stop()
-
     col1, col2, col3 = st.columns([1, 1, 1])
-
     with col1:
         st.metric("🎯 예측 확률 (HTN)", f"{proba*100:.1f}%" if proba is not None else "N/A")
     with col2:
@@ -241,7 +228,6 @@ if predict_btn:
         st.metric("📊 위험 등급", f"{risk_color} {risk}")
     with col3:
         st.metric("📌 권고", "정밀 검진" if (proba or 0) >= 0.5 else "주기 점검")
-
     st.divider()
     if proba is None:
         st.warning("예측 확률을 가져올 수 없습니다.")
@@ -260,14 +246,12 @@ if predict_btn:
             f"✓ 본 모델은 귀하의 고혈압 위험을 **낮음 ({proba*100:.1f}%)** 으로 평가했습니다. "
             "건강한 생활습관을 유지하시고 연 1회 정기 검진을 받으시기 바랍니다."
         )
-
     st.session_state["last_prediction"] = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "input": input_data.copy(),
         "probability": proba,
         "label": label,
     }
-
 
 st.divider()
 st.subheader("📝 사용자 피드백")
@@ -285,14 +269,11 @@ with st.form("feedback_form", clear_on_submit=True):
             "예측된 위험 등급이 본인의 체감과 일치하나요?",
             min_value=1, max_value=5, value=3,
         )
-
     comment = st.text_area(
         "자유 의견 (선택)",
         placeholder="예: '혈압 측정 결과는 정상이었어요'",
     )
-
     submitted = st.form_submit_button("📤 피드백 제출")
-
     if submitted:
         if "last_prediction" not in st.session_state:
             st.warning("먼저 위험도 예측을 실행해주세요.")
@@ -308,17 +289,14 @@ with st.form("feedback_form", clear_on_submit=True):
             }
             for k, v in lp["input"].items():
                 row[f"input_{k}"] = v
-
             script_dir = os.path.dirname(os.path.abspath(__file__))
             csv_path = os.path.join(script_dir, "user_feedback.csv")
             df_fb = pd.DataFrame([row])
             mode = "a" if os.path.exists(csv_path) else "w"
             header = not os.path.exists(csv_path)
             df_fb.to_csv(csv_path, mode=mode, header=header, index=False, encoding="utf-8-sig")
-
             st.success("✓ 피드백이 저장되었습니다. 감사합니다!")
             st.balloons()
-
 
 st.divider()
 st.caption(
