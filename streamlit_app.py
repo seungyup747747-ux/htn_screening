@@ -13,26 +13,19 @@ import streamlit as st
 
 TARGET_COL = "hypertension"
 
-# =============================================================
-# 페이지 설정
-# =============================================================
-st.set_page_config(
+
     page_title="고혈압 위험 스크리닝",
     page_icon="🩺",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# =============================================================
-# 모델 로드 (캐시) — 스크립트 위치 기반 경로 사용
-# =============================================================
 @st.cache_resource
 def load_htn_model():
-    """PyCaret으로 저장된 모델 로드"""
-    from pycaret.classification import load_model
+    import joblib
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    model_path = os.path.join(script_dir, "htn_final_model")
-    return load_model(model_path)
+    model_path = os.path.join(script_dir, "htn_final_model.pkl")
+    return joblib.load(model_path)
 
 
 try:
@@ -45,7 +38,6 @@ except Exception as e:
     model_error = str(e)
 
 
-# 모델이 요구하는 변수 목록 자동 감지 (타깃 컬럼 자동 제외)
 def detect_required_features(m):
     if m is None:
         return None
@@ -65,16 +57,14 @@ def detect_required_features(m):
 
 required_features = detect_required_features(model)
 
-# =============================================================
-# 헤더
-# =============================================================
+
 st.title("🩺 고혈압 위험 스크리닝 도구")
 st.markdown(
     "**KNHANES 9기 (2022~2024) 데이터 기반 머신러닝 모델** — "
     "혈압계 없이 설문 응답만으로 본인의 고혈압 위험 수준을 1차 점검합니다."
 )
 st.info(
-    "ℹ️ 본 도구는 **1차 스크리닝**용 학술 연구 목적이며, 의학적 진단을 대체할 수 없습니다. "
+    " 본 도구는 **1차 스크리닝**용 학술 연구 목적이며, 의학적 진단을 대체할 수 없습니다. "
     "정확한 진단은 반드시 의료기관에서 받으시기 바랍니다."
 )
 
