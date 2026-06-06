@@ -3,6 +3,7 @@
 - 모델: RidgeClassifier (Reduced) — KNHANES 9기 학습
 - 입력: 비침습 설문 변수 (혈압계 없이)
 - 출력: HTN 예측 확률 + 위험 등급 + 사용자 피드백 수집
+- EQ-5D: KNHANES 원문 문항 사용
 """
 import os
 import pickle
@@ -114,32 +115,100 @@ with st.sidebar.expander("🚬 생활습관"):
 
 with st.sidebar.expander("🧠 정신건강"):
     input_data["stress"] = st.selectbox(
-        "스트레스 수준",
+        "평소 스트레스 정도",
         options=[1, 2, 3, 4],
-        format_func=lambda x: {1: "거의 없음", 2: "조금", 3: "많이", 4: "대단히 많음"}[x],
+        format_func=lambda x: {
+            1: "거의 느끼지 않음",
+            2: "조금 느끼는 편",
+            3: "많이 느끼는 편",
+            4: "대단히 많이 느낌",
+        }[x],
     )
-    input_data["phq9"] = st.number_input("PHQ-9 우울 점수 (0~27)", 0, 27, 5)
+    input_data["phq9"] = st.number_input(
+        "PHQ-9 우울 점수 (0~27)", 0, 27, 5,
+        help="0~4: 정상  •  5~9: 경증  •  10~14: 중등도  •  15~19: 중증  •  20+: 매우 중증"
+    )
 
-with st.sidebar.expander("🩹 주관적 건강 (EQ-5D)"):
+with st.sidebar.expander("🩹 주관적 건강 / EQ-5D"):
+    st.caption("**평소에 본인의 건강은 어떻다고 생각하십니까?**")
     input_data["self_health"] = st.selectbox(
         "주관적 건강 상태",
         options=[1, 2, 3, 4, 5],
-        format_func=lambda x: {1: "매우 좋음", 2: "좋음", 3: "보통", 4: "나쁨", 5: "매우 나쁨"}[x],
+        format_func=lambda x: {
+            1: "매우 좋음",
+            2: "좋음",
+            3: "보통",
+            4: "나쁨",
+            5: "매우 나쁨",
+        }[x],
     )
-    eq5d_dims = ["운동 능력", "자기 관리", "일상 활동", "통증/불편", "불안/우울"]
-    for i, lbl in enumerate(eq5d_dims, 1):
+
+    st.markdown("---")
+    st.caption("**오늘 귀하의 건강 상태를 가장 잘 나타내는 항목을 선택해주세요 (EQ-5D-3L)**")
+
+    # KNHANES 원본 EQ-5D-3L 설문 문항 그대로
+    eq5d_questions = {
+        1: {
+            "dim": "🚶 운동 능력",
+            "options": {
+                1: "나는 걷는 데 지장이 없다",
+                2: "나는 걷는 데 다소 지장이 있다",
+                3: "나는 종일 누워있어야 한다",
+            },
+        },
+        2: {
+            "dim": "🧼 자기 관리",
+            "options": {
+                1: "나는 목욕을 하거나 옷을 입는 데 지장이 없다",
+                2: "나는 혼자 목욕을 하거나 옷을 입는 데 다소 지장이 있다",
+                3: "나는 혼자 목욕을 하거나 옷을 갈아입을 수 없다",
+            },
+        },
+        3: {
+            "dim": "📋 일상 활동 (일·공부·가사·여가활동)",
+            "options": {
+                1: "나는 일상 활동을 하는 데 지장이 없다",
+                2: "나는 일상 활동을 하는 데 다소 지장이 있다",
+                3: "나는 일상 활동을 할 수 없다",
+            },
+        },
+        4: {
+            "dim": "🤕 통증 / 불편",
+            "options": {
+                1: "나는 통증이나 불편감이 없다",
+                2: "나는 다소 통증이나 불편감이 있다",
+                3: "나는 심한 통증이나 불편감이 있다",
+            },
+        },
+        5: {
+            "dim": "😟 불안 / 우울",
+            "options": {
+                1: "나는 불안하거나 우울하지 않다",
+                2: "나는 다소 불안하거나 우울하다",
+                3: "나는 매우 심하게 불안하거나 우울하다",
+            },
+        },
+    }
+
+    for i, q in eq5d_questions.items():
         input_data[f"eq5d_{i}"] = st.selectbox(
-            lbl,
+            q["dim"],
             options=[1, 2, 3],
-            format_func=lambda x: {1: "문제 없음", 2: "다소 문제", 3: "심각한 문제"}[x],
+            format_func=lambda x, opts=q["options"]: opts[x],
             key=f"eq5d_{i}",
         )
 
 with st.sidebar.expander("🏠 사회인구학"):
     input_data["income"] = st.selectbox(
-        "소득 5분위",
+        "월 평균 가구 소득 (5분위)",
         options=[1, 2, 3, 4, 5],
-        format_func=lambda x: f"{x}분위  (1=하위 ~ 5=상위)",
+        format_func=lambda x: {
+            1: "1분위 (하위 20%)",
+            2: "2분위",
+            3: "3분위 (중간)",
+            4: "4분위",
+            5: "5분위 (상위 20%)",
+        }[x],
     )
     input_data["edu"] = st.selectbox(
         "최종 학력",
@@ -147,20 +216,28 @@ with st.sidebar.expander("🏠 사회인구학"):
         format_func=lambda x: {1: "초졸 이하", 2: "중졸", 3: "고졸", 4: "대졸 이상"}[x],
     )
     input_data["occupation"] = st.selectbox(
-        "직업군",
+        "직업군 (KNHANES occp 분류)",
         options=[1, 2, 3, 4, 5, 6, 7],
-        format_func=lambda x: f"{x}번 직업군",
+        format_func=lambda x: {
+            1: "1. 관리자·전문가",
+            2: "2. 사무직",
+            3: "3. 서비스·판매직",
+            4: "4. 농림어업 숙련직",
+            5: "5. 기능·기계조작·조립직",
+            6: "6. 단순노무직",
+            7: "7. 무직(주부·학생·기타)",
+        }[x],
     )
     input_data["married"] = st.selectbox(
         "혼인 상태",
         options=[1, 2],
-        format_func=lambda x: "기혼 (배우자 있음)" if x == 1 else "미혼/이혼/사별",
+        format_func=lambda x: "기혼 (배우자 있음)" if x == 1 else "미혼 / 이혼 / 사별",
     )
-    input_data["household_size"] = st.number_input("가구원 수", 1, 10, 2)
+    input_data["household_size"] = st.number_input("가구원 수 (본인 포함)", 1, 10, 2)
     input_data["urban"] = st.selectbox(
         "거주지",
         options=[1, 2],
-        format_func=lambda x: "도시(동)" if x == 1 else "농촌(읍·면)",
+        format_func=lambda x: "도시 (동 지역)" if x == 1 else "농촌 (읍·면 지역)",
     )
 
 predict_btn = st.sidebar.button("🔍 위험도 예측", type="primary", use_container_width=True)
