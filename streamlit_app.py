@@ -58,7 +58,7 @@ def detect_required_features(m):
 
 required_features = detect_required_features(model)
 
-st.title("🩺 고혈압 위험 스크리닝 도구")
+st.title("비침습적 변수를 활용한 고혈압 스크리닝")
 st.markdown(
     "**KNHANES 9기 (2022~2024) 데이터 기반 머신러닝 모델** — "
     "혈압계 없이 **13개 설문 문항**만으로 본인의 고혈압 위험 수준을 1차 점검합니다."
@@ -69,12 +69,11 @@ st.info(
 )
 
 if not model_loaded:
-    st.error(f"❌ 모델 로드 실패: {model_error}")
+    st.error(f" 모델 로드 실패: {model_error}")
     st.info("`htn_final_model.pkl` 파일이 같은 폴더에 있는지 확인하세요.")
     st.stop()
 
 st.sidebar.header("📋 설문 응답 (13문항)")
-st.sidebar.caption("SHAP 분석 기반 핵심 13개 변수만 사용 (원본 24개 → 응답 부담 약 54% 감소)")
 input_data = {}
 
 with st.sidebar.expander("👤 기본 정보", expanded=True):
@@ -97,8 +96,37 @@ with st.sidebar.expander("🚬 생활습관"):
         options=[0, 1, 2],
         format_func=lambda x: {0: "비흡연", 1: "과거 흡연", 2: "현재 흡연"}[x],
     )
-    input_data["drink_freq"] = st.slider("음주 빈도 (0=안 마심, 1~7 등급)", 0, 7, 1)
-    input_data["drink_amount"] = st.slider("음주량 (0=안 마심, 1~7 등급)", 0, 7, 1)
+
+    st.markdown("---")
+    st.caption("**음주 관련 (KNHANES 원본 BD1·BD2 문항)**")
+    
+    input_data["drink_freq"] = st.selectbox(
+        "최근 1년간 술을 얼마나 자주 마십니까?",
+        options=[0, 1, 2, 3, 4, 5, 6],
+        format_func=lambda x: {
+            0: "0 — 평생 술을 마신 적 없음",
+            1: "1 — 최근 1년간 전혀 마시지 않음",
+            2: "2 — 월 1회 미만",
+            3: "3 — 월 1회 정도",
+            4: "4 — 월 2~4회 정도",
+            5: "5 — 주 2~3회 정도",
+            6: "6 — 주 4회 이상",
+        }[x],
+    )
+    
+    input_data["drink_amount"] = st.selectbox(
+        "한 번에 술을 마실 때 보통 어느 정도 마십니까? (소주 기준)",
+        options=[0, 1, 2, 3, 4, 5],
+        format_func=lambda x: {
+            0: "0 — 마시지 않음",
+            1: "1 — 소주 1~2잔",
+            2: "2 — 소주 3~4잔",
+            3: "3 — 소주 5~6잔",
+            4: "4 — 소주 7~9잔",
+            5: "5 — 소주 10잔 이상",
+        }[x],
+        help="• 소주 1잔 ≈ 50ml  • 맥주 1캔(355ml) ≈ 소주 1~1.5잔  • 와인 1잔(150ml) ≈ 소주 1.5잔"
+    )
 
 with st.sidebar.expander("🧠 정신건강"):
     input_data["stress"] = st.selectbox(
