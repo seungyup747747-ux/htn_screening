@@ -1,9 +1,8 @@
 """
 고혈압 위험 스크리닝 웹앱 (Streamlit)
 - 모델: RidgeClassifier (Reduced) — KNHANES 9기 학습
-- 입력: 비침습 설문 변수 (혈압계 없이)
+- 입력: 비침습 설문 변수 13개 (응답 부담 최소화)
 - 출력: HTN 예측 확률 + 위험 등급 + 사용자 피드백 수집
-- EQ-5D: KNHANES 원문 문항 사용
 """
 import os
 import pickle
@@ -24,7 +23,6 @@ st.set_page_config(
 
 @st.cache_resource
 def load_htn_model():
-    """pickle로 직접 로드 (Python 내장, 별도 설치 불필요)"""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     model_path = os.path.join(script_dir, "htn_final_model.pkl")
     with open(model_path, "rb") as f:
@@ -63,7 +61,7 @@ required_features = detect_required_features(model)
 st.title("🩺 고혈압 위험 스크리닝 도구")
 st.markdown(
     "**KNHANES 9기 (2022~2024) 데이터 기반 머신러닝 모델** — "
-    "혈압계 없이 설문 응답만으로 본인의 고혈압 위험 수준을 1차 점검합니다."
+    "혈압계 없이 **13개 설문 문항**만으로 본인의 고혈압 위험 수준을 1차 점검합니다."
 )
 st.info(
     "ℹ️ 본 도구는 **1차 스크리닝**용 학술 연구 목적이며, 의학적 진단을 대체할 수 없습니다. "
@@ -75,10 +73,8 @@ if not model_loaded:
     st.info("`htn_final_model.pkl` 파일이 같은 폴더에 있는지 확인하세요.")
     st.stop()
 
-st.sidebar.header("📋 설문 응답")
-st.sidebar.caption(
-    f"모델 요구 변수: {len(required_features) if required_features else '자동 감지'}개"
-)
+st.sidebar.header("📋 설문 응답 (13문항)")
+st.sidebar.caption("SHAP 분석 기반 핵심 13개 변수만 사용 (원본 24개 → 응답 부담 약 54% 감소)")
 input_data = {}
 
 with st.sidebar.expander("👤 기본 정보", expanded=True):
@@ -103,15 +99,6 @@ with st.sidebar.expander("🚬 생활습관"):
     )
     input_data["drink_freq"] = st.slider("음주 빈도 (0=안 마심, 1~7 등급)", 0, 7, 1)
     input_data["drink_amount"] = st.slider("음주량 (0=안 마심, 1~7 등급)", 0, 7, 1)
-    input_data["walk_min_week"] = st.number_input(
-        "주간 총 걷기 시간 (분)", 0, 5000, 150, step=10
-    )
-    input_data["sedentary_min_day"] = st.number_input(
-        "일일 좌식 시간 (분)", 0, 1440, 480, step=30
-    )
-    input_data["sleep_hours"] = st.number_input(
-        "평균 수면 시간 (시간)", 0.0, 16.0, 7.0, step=0.5
-    )
 
 with st.sidebar.expander("🧠 정신건강"):
     input_data["stress"] = st.selectbox(
@@ -124,12 +111,8 @@ with st.sidebar.expander("🧠 정신건강"):
             4: "대단히 많이 느낌",
         }[x],
     )
-    input_data["phq9"] = st.number_input(
-        "PHQ-9 우울 점수 (0~27)", 0, 27, 5,
-        help="0~4: 정상  •  5~9: 경증  •  10~14: 중등도  •  15~19: 중증  •  20+: 매우 중증"
-    )
 
-with st.sidebar.expander("🩹 주관적 건강 / EQ-5D"):
+with st.sidebar.expander("🩹 주관적 건강"):
     st.caption("**평소에 본인의 건강은 어떻다고 생각하십니까?**")
     input_data["self_health"] = st.selectbox(
         "주관적 건강 상태",
@@ -142,61 +125,6 @@ with st.sidebar.expander("🩹 주관적 건강 / EQ-5D"):
             5: "매우 나쁨",
         }[x],
     )
-
-    st.markdown("---")
-    st.caption("**오늘 귀하의 건강 상태를 가장 잘 나타내는 항목을 선택해주세요 (EQ-5D-3L)**")
-
-    # KNHANES 원본 EQ-5D-3L 설문 문항 그대로
-    eq5d_questions = {
-        1: {
-            "dim": "🚶 운동 능력",
-            "options": {
-                1: "나는 걷는 데 지장이 없다",
-                2: "나는 걷는 데 다소 지장이 있다",
-                3: "나는 종일 누워있어야 한다",
-            },
-        },
-        2: {
-            "dim": "🧼 자기 관리",
-            "options": {
-                1: "나는 목욕을 하거나 옷을 입는 데 지장이 없다",
-                2: "나는 혼자 목욕을 하거나 옷을 입는 데 다소 지장이 있다",
-                3: "나는 혼자 목욕을 하거나 옷을 갈아입을 수 없다",
-            },
-        },
-        3: {
-            "dim": "📋 일상 활동 (일·공부·가사·여가활동)",
-            "options": {
-                1: "나는 일상 활동을 하는 데 지장이 없다",
-                2: "나는 일상 활동을 하는 데 다소 지장이 있다",
-                3: "나는 일상 활동을 할 수 없다",
-            },
-        },
-        4: {
-            "dim": "🤕 통증 / 불편",
-            "options": {
-                1: "나는 통증이나 불편감이 없다",
-                2: "나는 다소 통증이나 불편감이 있다",
-                3: "나는 심한 통증이나 불편감이 있다",
-            },
-        },
-        5: {
-            "dim": "😟 불안 / 우울",
-            "options": {
-                1: "나는 불안하거나 우울하지 않다",
-                2: "나는 다소 불안하거나 우울하다",
-                3: "나는 매우 심하게 불안하거나 우울하다",
-            },
-        },
-    }
-
-    for i, q in eq5d_questions.items():
-        input_data[f"eq5d_{i}"] = st.selectbox(
-            q["dim"],
-            options=[1, 2, 3],
-            format_func=lambda x, opts=q["options"]: opts[x],
-            key=f"eq5d_{i}",
-        )
 
 with st.sidebar.expander("🏠 사회인구학"):
     input_data["income"] = st.selectbox(
@@ -216,7 +144,7 @@ with st.sidebar.expander("🏠 사회인구학"):
         format_func=lambda x: {1: "초졸 이하", 2: "중졸", 3: "고졸", 4: "대졸 이상"}[x],
     )
     input_data["occupation"] = st.selectbox(
-        "직업군 (KNHANES occp 분류)",
+        "직업군",
         options=[1, 2, 3, 4, 5, 6, 7],
         format_func=lambda x: {
             1: "1. 관리자·전문가",
@@ -228,12 +156,6 @@ with st.sidebar.expander("🏠 사회인구학"):
             7: "7. 무직(주부·학생·기타)",
         }[x],
     )
-    input_data["married"] = st.selectbox(
-        "혼인 상태",
-        options=[1, 2],
-        format_func=lambda x: "기혼 (배우자 있음)" if x == 1 else "미혼 / 이혼 / 사별",
-    )
-    input_data["household_size"] = st.number_input("가구원 수 (본인 포함)", 1, 10, 2)
     input_data["urban"] = st.selectbox(
         "거주지",
         options=[1, 2],
@@ -378,7 +300,7 @@ with st.form("feedback_form", clear_on_submit=True):
 st.divider()
 st.caption(
     "**Data**: 국민건강영양조사(KNHANES) 제9기 (질병관리청, 2022~2024)  •  "
-    "**Model**: RidgeClassifier (Reduced)  •  "
+    "**Model**: RidgeClassifier (Reduced, 13 변수)  •  "
     "**Sensitivity**: 79.1%  •  **NPV**: 86.5%"
 )
 st.caption(
