@@ -26,11 +26,36 @@ st.set_page_config(
 
 @st.cache_resource
 def load_htn_model():
-    """노트북 final_exp.save_model 로 생성한 PyCaret 파이프라인 로드."""
+    """노트북 final_exp.save_model 로 생성한 PyCaret 파이프라인 로드.
+
+    PyCaret 의 save_model 은 내부적으로 joblib.dump 를 사용하므로
+    동일하게 joblib.load 로 읽는다. 만일을 대비해 pickle 도 시도한다.
+    저장된 객체가 (pipeline, name) 형태의 튜플/리스트인 경우
+    predict 가 가능한 요소를 추출한다.
+    """
     script_dir = os.path.dirname(os.path.abspath(__file__))
     model_path = os.path.join(script_dir, "htn_final_model.pkl")
-    with open(model_path, "rb") as f:
-        return pickle.load(f)
+
+    obj = None
+    try:
+        import joblib
+        obj = joblib.load(model_path)
+    except Exception:
+        with open(model_path, "rb") as f:
+            obj = pickle.load(f)
+
+    if isinstance(obj, (tuple, list)):
+        for elem in obj:
+            if hasattr(elem, "predict"):
+                obj = elem
+                break
+
+    if not hasattr(obj, "predict"):
+        raise RuntimeError(
+            f"로드된 객체에 predict 메서드가 없습니다. type={type(obj).__name__}"
+        )
+
+    return obj
 
 
 @st.cache_resource
