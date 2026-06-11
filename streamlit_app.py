@@ -1,12 +1,15 @@
 """
 고혈압 위험 스크리닝 웹앱 (Streamlit)
-- 모델: RidgeClassifier (Reduced) — KNHANES 9기 학습
-- 입력: 비침습 설문 변수 13개 (응답 부담 최소화)
-- 출력: HTN 예측 확률 + 위험 등급 + 사용자 피드백 수집
+- 모델: GradientBoostingClassifier (Top12) — KNHANES 9기 (2022~2024) 학습
+- 임계값: OOF 민감도 85% 목표 기준 데이터 기반 도출 (0.3072)
+- 입력: 비침습 자가보고 변수 12개 (혈압계 없이)
+- 출력: 스크리닝 위험점수 + 데이터 기반 임계값 기준 분류
 """
+import json
 import os
 import pickle
 from datetime import datetime
+
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -23,10 +26,20 @@ st.set_page_config(
 
 @st.cache_resource
 def load_htn_model():
+    """노트북 final_exp.save_model 로 생성한 PyCaret 파이프라인 로드."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     model_path = os.path.join(script_dir, "htn_final_model.pkl")
     with open(model_path, "rb") as f:
         return pickle.load(f)
+
+
+@st.cache_resource
+def load_screening_config():
+    """노트북에서 저장한 임계값·메타데이터 로드."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(script_dir, "screening_config.json")
+    with open(config_path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
 try:
@@ -37,6 +50,26 @@ except Exception as e:
     model = None
     model_loaded = False
     model_error = str(e)
+
+try:
+    screening_config = load_screening_config()
+except Exception:
+    screening_config = {
+        "screening_threshold": 0.3072,
+        "target_sensitivity": 0.85,
+        "model": "GradientBoostingClassifier",
+        "feature_version": "Top12",
+        "score_method": "predict_proba",
+        "input_variables": [
+            "age", "waist", "dyslipidemia_dx", "bmi",
+            "fh_htn_mother", "fh_htn_sibling", "fh_htn_father",
+            "married", "self_health", "edu",
+            "drink_amount", "drink_freq",
+        ],
+    }
+
+SCREENING_THRESHOLD = float(screening_config.get("screening_threshold", 0.3072))
+TARGET_SENS = float(screening_config.get("target_sensitivity", 0.85))
 
 
 def detect_required_features(m):
@@ -58,153 +91,134 @@ def detect_required_features(m):
 
 required_features = detect_required_features(model)
 
-st.title("비침습적 변수를 활용한 고혈압 스크리닝")
+st.title("🩺 고혈압 위험 스크리닝 도구")
 st.markdown(
     "**KNHANES 9기 (2022~2024) 데이터 기반 머신러닝 모델** — "
-    "혈압계 없이 **13개 설문 문항**만으로 본인의 고혈압 위험 수준을 1차 점검합니다."
+    "혈압계 없이 12개 설문 응답만으로 고혈압 위험 수준을 1차 점검합니다."
 )
 st.info(
     "ℹ️ 본 도구는 **1차 스크리닝**용 학술 연구 목적이며, 의학적 진단을 대체할 수 없습니다. "
-    "정확한 진단은 반드시 의료기관에서 받으시기 바랍니다."
+    "임계값을 초과한 경우 의료기관에서 정확한 혈압 측정을 받으시기 바랍니다."
 )
 
 if not model_loaded:
-    st.error(f" 모델 로드 실패: {model_error}")
+    st.error(f"❌ 모델 로드 실패: {model_error}")
     st.info("`htn_final_model.pkl` 파일이 같은 폴더에 있는지 확인하세요.")
     st.stop()
 
-st.sidebar.header("📋 설문 응답 (13문항)")
+st.sidebar.header("📋 설문 응답 (12문항)")
+st.sidebar.caption(
+    f"모델: {screening_config.get('model', 'GradientBoostingClassifier')} • "
+    f"변수: {screening_config.get('feature_version', 'Top12')} • "
+    f"임계값: {SCREENING_THRESHOLD:.4f}"
+)
+
 input_data = {}
+
+
+def yes_no_unknown(label, key, help_text=None):
+    """0=아니오, 1=예, np.nan=모름"""
+    choice = st.selectbox(
+        label,
+        options=["아니오", "예", "모름"],
+        index=0,
+        key=key,
+        help=help_text,
+    )
+    return {"아니오": 0, "예": 1, "모름": np.nan}[choice]
+
 
 with st.sidebar.expander("👤 기본 정보", expanded=True):
     input_data["age"] = st.number_input("나이 (만)", 19, 100, 50)
-    input_data["sex"] = st.selectbox(
-        "성별",
-        options=[1, 2],
-        format_func=lambda x: "남자" if x == 1 else "여자",
-    )
     input_data["bmi"] = st.number_input(
-        "BMI (kg/m²)", 10.0, 50.0, 23.0, step=0.1, help="체중(kg) / 키(m)²"
+        "BMI (kg/m²)", 10.0, 50.0, 23.0, step=0.1,
+        help="체중(kg) / 키(m)²"
     )
     input_data["waist"] = st.number_input(
-        "허리둘레 (cm)", 50.0, 150.0, 85.0, step=0.5
+        "허리둘레 (cm)", 50.0, 150.0, 85.0, step=0.5,
+        help="배꼽 높이에서 줄자로 측정"
     )
 
-with st.sidebar.expander("🚬 생활습관"):
-    input_data["smoking_status"] = st.selectbox(
-        "흡연 상태",
-        options=[0, 1, 2],
-        format_func=lambda x: {0: "비흡연", 1: "과거 흡연", 2: "현재 흡연"}[x],
-    )
-
-    st.markdown("---")
-    st.caption("**음주 관련 (KNHANES 원본 BD1·BD2 문항)**")
-    
+with st.sidebar.expander("🍷 음주", expanded=True):
     input_data["drink_freq"] = st.selectbox(
-        "최근 1년간 술을 얼마나 자주 마십니까?",
+        "최근 1년간 음주 빈도",
         options=[0, 1, 2, 3, 4, 5, 6],
         format_func=lambda x: {
-            0: "0 — 평생 술을 마신 적 없음",
-            1: "1 — 최근 1년간 전혀 마시지 않음",
-            2: "2 — 월 1회 미만",
-            3: "3 — 월 1회 정도",
-            4: "4 — 월 2~4회 정도",
-            5: "5 — 주 2~3회 정도",
-            6: "6 — 주 4회 이상",
+            0: "0. 안 마심",
+            1: "1. 월 1회 미만",
+            2: "2. 월 1회 정도",
+            3: "3. 월 2~4회",
+            4: "4. 주 2~3회",
+            5: "5. 주 4회 이상",
+            6: "6. 매일",
         }[x],
     )
-    
     input_data["drink_amount"] = st.selectbox(
-        "한 번에 술을 마실 때 보통 어느 정도 마십니까? (소주 기준)",
+        "한 번에 마시는 음주량 (술잔 기준)",
         options=[0, 1, 2, 3, 4, 5],
         format_func=lambda x: {
-            0: "0 — 마시지 않음",
-            1: "1 — 소주 1~2잔",
-            2: "2 — 소주 3~4잔",
-            3: "3 — 소주 5~6잔",
-            4: "4 — 소주 7~9잔",
-            5: "5 — 소주 10잔 이상",
-        }[x],
-        help="• 소주 1잔 ≈ 50ml  • 맥주 1캔(355ml) ≈ 소주 1~1.5잔  • 와인 1잔(150ml) ≈ 소주 1.5잔"
-    )
-
-with st.sidebar.expander("🧠 정신건강"):
-    input_data["stress"] = st.selectbox(
-        "평소 스트레스 정도",
-        options=[1, 2, 3, 4],
-        format_func=lambda x: {
-            1: "거의 느끼지 않음",
-            2: "조금 느끼는 편",
-            3: "많이 느끼는 편",
-            4: "대단히 많이 느낌",
+            0: "0. 안 마심",
+            1: "1. 1~2잔",
+            2: "2. 3~4잔",
+            3: "3. 5~6잔",
+            4: "4. 7~9잔",
+            5: "5. 10잔 이상",
         }[x],
     )
 
-with st.sidebar.expander("🩹 주관적 건강"):
-    st.caption("**평소에 본인의 건강은 어떻다고 생각하십니까?**")
-    st.caption("👉 같은 또래(나이·성별)와 비교해서 판단하세요")
-    
-    input_data["self_health"] = st.selectbox(
-        "주관적 건강 상태",
-        options=[1, 2, 3, 4, 5],
-        format_func=lambda x: {
-            1: "1 — 매우 좋음  (또래보다 훨씬 건강)",
-            2: "2 — 좋음  (또래보다 건강한 편)",
-            3: "3 — 보통  (또래와 비슷)",
-            4: "4 — 나쁨  (또래보다 건강이 좋지 않음)",
-            5: "5 — 매우 나쁨  (또래보다 매우 좋지 않음)",
-        }[x],
-        help=(
-            "**판단 기준**\n\n"
-            "• **시점**: '오늘'이 아니라 '평소·최근' 기준\n"
-            "• **비교**: 같은 또래와 비교\n"
-            "• **범위**: 신체·정신·일상 기능 종합\n\n"
-            "**구체적 예시**\n"
-            "• 1점: 만성질환·증상 거의 없음, 활기참\n"
-            "• 2점: 가끔 가벼운 증상, 일상에 지장 없음\n"
-            "• 3점: 특별히 좋지도 나쁘지도 않음\n"
-            "• 4점: 일상에 영향 주는 증상 있음, 자주 피로\n"
-            "• 5점: 여러 질환으로 일상생활에 큰 지장"
-        ),
-    )
-    
-with st.sidebar.expander("🏠 사회인구학"):
-    input_data["income"] = st.selectbox(
-        "월 평균 가구 소득 (5분위)",
-        options=[1, 2, 3, 4, 5],
-        format_func=lambda x: {
-            1: "1분위 (하위 20%)",
-            2: "2분위",
-            3: "3분위 (중간)",
-            4: "4분위",
-            5: "5분위 (상위 20%)",
-        }[x],
+with st.sidebar.expander("🏠 사회인구학", expanded=True):
+    input_data["married"] = st.selectbox(
+        "혼인 상태",
+        options=[1, 2],
+        format_func=lambda x: "1. 기혼 (배우자 있음)" if x == 1
+                              else "2. 미혼 / 이혼 / 사별",
     )
     input_data["edu"] = st.selectbox(
         "최종 학력",
         options=[1, 2, 3, 4],
-        format_func=lambda x: {1: "초졸 이하", 2: "중졸", 3: "고졸", 4: "대졸 이상"}[x],
-    )
-    input_data["occupation"] = st.selectbox(
-        "직업군",
-        options=[1, 2, 3, 4, 5, 6, 7],
         format_func=lambda x: {
-            1: "1. 관리자·전문가",
-            2: "2. 사무직",
-            3: "3. 서비스·판매직",
-            4: "4. 농림어업 숙련직",
-            5: "5. 기능·기계조작·조립직",
-            6: "6. 단순노무직",
-            7: "7. 무직(주부·학생·기타)",
+            1: "1. 초졸 이하",
+            2: "2. 중졸",
+            3: "3. 고졸",
+            4: "4. 대졸 이상",
         }[x],
     )
-    input_data["urban"] = st.selectbox(
-        "거주지",
-        options=[1, 2],
-        format_func=lambda x: "도시 (동 지역)" if x == 1 else "농촌 (읍·면 지역)",
+    input_data["self_health"] = st.selectbox(
+        "주관적 건강 상태",
+        options=[1, 2, 3, 4, 5],
+        format_func=lambda x: {
+            1: "1. 매우 좋음",
+            2: "2. 좋음",
+            3: "3. 보통",
+            4: "4. 나쁨",
+            5: "5. 매우 나쁨",
+        }[x],
     )
 
-predict_btn = st.sidebar.button("🔍 위험도 예측", type="primary", use_container_width=True)
+with st.sidebar.expander("🩺 기저질환", expanded=True):
+    input_data["dyslipidemia_dx"] = yes_no_unknown(
+        "이상지질혈증 의사진단 받은 적 있음",
+        key="dyslipidemia_dx",
+        help_text="콜레스테롤·중성지방 이상 등으로 진단받은 경우",
+    )
+
+with st.sidebar.expander("👨‍👩‍👧 가족력 (직계가족 고혈압)", expanded=True):
+    input_data["fh_htn_father"] = yes_no_unknown(
+        "아버지 — 고혈압 진단 이력",
+        key="fh_htn_father",
+    )
+    input_data["fh_htn_mother"] = yes_no_unknown(
+        "어머니 — 고혈압 진단 이력",
+        key="fh_htn_mother",
+    )
+    input_data["fh_htn_sibling"] = yes_no_unknown(
+        "형제자매 — 고혈압 진단 이력",
+        key="fh_htn_sibling",
+    )
+
+predict_btn = st.sidebar.button(
+    "🔍 위험도 평가", type="primary", use_container_width=True
+)
 
 
 def predict_htn(model, input_dict, required_cols):
@@ -216,81 +230,91 @@ def predict_htn(model, input_dict, required_cols):
         df = df[required_cols]
     if TARGET_COL in df.columns:
         df = df.drop(columns=[TARGET_COL])
-    y_pred = model.predict(df)
-    label = int(y_pred[0])
-    proba = None
+
+    risk_score = None
     if hasattr(model, "predict_proba"):
         try:
             proba_arr = model.predict_proba(df)
             cls_list = list(model.classes_) if hasattr(model, "classes_") else None
             if cls_list and 1 in cls_list:
-                proba = float(proba_arr[0, cls_list.index(1)])
+                risk_score = float(proba_arr[0, cls_list.index(1)])
             else:
-                proba = float(proba_arr[0, -1])
+                risk_score = float(proba_arr[0, -1])
         except Exception:
-            proba = None
-    if proba is None and hasattr(model, "decision_function"):
+            risk_score = None
+
+    if risk_score is None and hasattr(model, "decision_function"):
         try:
             from scipy.special import expit
             score = model.decision_function(df)
             s = float(score[0]) if hasattr(score, "__len__") else float(score)
-            proba = float(expit(s))
+            risk_score = float(expit(s))
         except Exception:
-            proba = None
-    if proba is None:
-        proba = float(label)
-    return proba, label
+            risk_score = None
+
+    if risk_score is None:
+        y_pred = model.predict(df)
+        return float(int(y_pred[0])), int(y_pred[0])
+
+    label = int(risk_score >= SCREENING_THRESHOLD)
+    return risk_score, label
 
 
 if predict_btn:
-    with st.spinner("예측 중..."):
+    with st.spinner("평가 중..."):
         try:
-            proba, label = predict_htn(model, input_data, required_features)
+            risk_score, label = predict_htn(model, input_data, required_features)
         except Exception as e:
-            st.error(f"예측 중 오류: {e}")
+            st.error(f"평가 중 오류: {e}")
             st.exception(e)
             st.stop()
+
+    is_positive = (risk_score >= SCREENING_THRESHOLD)
+
     col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
-        st.metric("🎯 예측 확률 (HTN)", f"{proba*100:.1f}%" if proba is not None else "N/A")
-    with col2:
-        if proba is None:
-            risk = "—"
-            risk_color = "⚪"
-        elif proba < 0.3:
-            risk = "낮음"
-            risk_color = "🟢"
-        elif proba < 0.6:
-            risk = "중간"
-            risk_color = "🟡"
-        else:
-            risk = "높음"
-            risk_color = "🔴"
-        st.metric("📊 위험 등급", f"{risk_color} {risk}")
-    with col3:
-        st.metric("📌 권고", "정밀 검진" if (proba or 0) >= 0.5 else "주기 점검")
-    st.divider()
-    if proba is None:
-        st.warning("예측 확률을 가져올 수 없습니다.")
-    elif proba >= 0.5:
-        st.error(
-            f"⚠ 본 모델은 귀하의 고혈압 위험을 **높음 ({proba*100:.1f}%)** 으로 평가했습니다. "
-            "병원·보건소에서 정확한 혈압 측정을 받으시기를 권합니다."
+        st.metric(
+            "🎯 위험 점수",
+            f"{risk_score:.4f}",
+            help="모델이 산출한 스크리닝 점수 (보정된 확률 아님)",
         )
-    elif proba >= 0.3:
-        st.warning(
-            f"⚠ 본 모델은 귀하의 고혈압 위험을 **중간 ({proba*100:.1f}%)** 으로 평가했습니다. "
-            "정기적인 자가 혈압 측정과 생활습관 관리를 권합니다."
+    with col2:
+        st.metric(
+            "📏 임계값",
+            f"{SCREENING_THRESHOLD:.4f}",
+            help=f"OOF 민감도 {TARGET_SENS*100:.0f}% 목표 기준",
+        )
+    with col3:
+        st.metric(
+            "📌 판정",
+            "🔴 양성 (정밀 검진 권고)" if is_positive else "🟢 음성 (주기 점검)",
+        )
+
+    st.divider()
+
+    if is_positive:
+        st.error(
+            f"⚠ **양성** — 위험 점수 {risk_score:.4f} ≥ 임계값 {SCREENING_THRESHOLD:.4f}\n\n"
+            "본 스크리닝 모델은 귀하의 고혈압 위험을 **임계값 이상**으로 평가했습니다. "
+            "병원·보건소에서 정확한 혈압 측정을 권장합니다.\n\n"
+            "※ 본 도구의 양성 판정 정확도(특이도)는 약 69%이므로, "
+            "실제 고혈압이 아닌 경우에도 양성으로 분류될 수 있습니다. "
+            "최종 진단은 의료기관의 혈압 측정으로 확정됩니다."
         )
     else:
         st.success(
-            f"✓ 본 모델은 귀하의 고혈압 위험을 **낮음 ({proba*100:.1f}%)** 으로 평가했습니다. "
-            "건강한 생활습관을 유지하시고 연 1회 정기 검진을 받으시기 바랍니다."
+            f"✓ **음성** — 위험 점수 {risk_score:.4f} < 임계값 {SCREENING_THRESHOLD:.4f}\n\n"
+            "본 스크리닝 모델은 귀하의 고혈압 위험을 **임계값 미만**으로 평가했습니다. "
+            "건강한 생활습관 유지와 연 1회 정기 검진을 권장합니다.\n\n"
+            "※ 본 도구의 음성 판정 정확도(NPV)는 약 89%로, "
+            "약 11%의 음성 판정은 실제 고혈압을 놓칠 수 있습니다."
         )
+
     st.session_state["last_prediction"] = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "input": input_data.copy(),
-        "probability": proba,
+        "risk_score": risk_score,
+        "threshold": SCREENING_THRESHOLD,
         "label": label,
     }
 
@@ -307,7 +331,7 @@ with st.form("feedback_form", clear_on_submit=True):
         )
     with col2:
         agree = st.slider(
-            "예측된 위험 등급이 본인의 체감과 일치하나요?",
+            "예측된 판정이 본인의 체감과 일치하나요?",
             min_value=1, max_value=5, value=3,
         )
     comment = st.text_area(
@@ -317,12 +341,13 @@ with st.form("feedback_form", clear_on_submit=True):
     submitted = st.form_submit_button("📤 피드백 제출")
     if submitted:
         if "last_prediction" not in st.session_state:
-            st.warning("먼저 위험도 예측을 실행해주세요.")
+            st.warning("먼저 위험도 평가를 실행해주세요.")
         else:
             lp = st.session_state["last_prediction"]
             row = {
                 "timestamp": lp["timestamp"],
-                "probability": lp["probability"],
+                "risk_score": lp["risk_score"],
+                "threshold": lp["threshold"],
                 "predicted_label": lp["label"],
                 "actual_match": actual_dx,
                 "perception_agreement": agree,
@@ -335,15 +360,20 @@ with st.form("feedback_form", clear_on_submit=True):
             df_fb = pd.DataFrame([row])
             mode = "a" if os.path.exists(csv_path) else "w"
             header = not os.path.exists(csv_path)
-            df_fb.to_csv(csv_path, mode=mode, header=header, index=False, encoding="utf-8-sig")
+            df_fb.to_csv(
+                csv_path, mode=mode, header=header,
+                index=False, encoding="utf-8-sig",
+            )
             st.success("✓ 피드백이 저장되었습니다. 감사합니다!")
             st.balloons()
 
 st.divider()
 st.caption(
     "**Data**: 국민건강영양조사(KNHANES) 제9기 (질병관리청, 2022~2024)  •  "
-    "**Model**: RidgeClassifier (Reduced, 13 변수)  •  "
-    "**Sensitivity**: 79.1%  •  **NPV**: 86.5%"
+    f"**Model**: {screening_config.get('model', 'GradientBoostingClassifier')} "
+    f"({screening_config.get('feature_version', 'Top12')})  •  "
+    "**Holdout Sensitivity**: 84.8%  •  **Specificity**: 68.9%  •  "
+    "**NPV**: 89.3%  •  **ROC-AUC**: 0.856"
 )
 st.caption(
     "© 2026 백승엽 (응용정보공학)  •  고급데이터분석 기말 프로젝트"
